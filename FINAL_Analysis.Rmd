@@ -1,0 +1,611 @@
+---
+title: "Estimation of Student and Employee Annual Commuting Mileage at Miami University"
+author: "Carter Vonderahe and Jing Jing"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    theme: journal
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+# load libraries
+library(readxl)
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library(scales)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+```
+
+
+# 1. Introduction
+This project was requested by President Crawford and is tied to the University Climate Action Plan. The goal is to quantify the carbon emissions resulting from commuting to campus in the 2025 fiscal year (FY25). We focus on two groups: (1) MU employees (faculty/staff with parking permits) and (2) MU commuting students. For each group—and for the two groups combined—we aim to estimate:
+
+* total annual commuting miles driven,
+* total annual gasoline consumption (gallons),
+* total greenhouse gas emissions (metric tons of CO2).
+
+Our main data source is the FY25 online parking permit application survey. President Crawford requested a single number to represent carbon emissions from commuting. However, because the data are not a full census, we can only estimate the totals and do not have the ability to compute the true values. Therefore, there will be some degree of uncertainty in our estimation which we seek to quantify in this analysis.
+
+
+# 2. Methods
+
+## 2.1 Data & Target Population
+The FY25 online parking permit application survey provides self-reported commuting frequency by term, the apportionment of various modes of transportation, and home address. The survey was optional for all parking permit purchasers. Prior to receiving the data, home address was converted to the distance in miles to campus using GIS. The shortest route on roads from the home address to the campus center was used (as opposed to an "as the crow flies" approach). The survey data contained many lengthy variable names, so we rename them for clarity:
+
+```{r data_load}
+# define column names
+student_cols <- c("On_campus", "Days_fall_spring", "Days_jterm", "Days_summer",
+                  "Walk", "Drive_gas", "Drive_electric", "Bike_or_nonmotor", "Bus",
+                  "Carpool", "Motorcycle_or_scooter", "Other", "Miles_to_campus")
+employee_cols <- c("Days_commute_fall_spring", "Days_remote_fall_spring",
+                   "Days_commute_summer_winter", "Days_remote_summer_winter", "Gas_100",
+                   "Drive_gas", "Drive_electric", "Walk", "Bike_or_nonmotor", "Bus",
+                   "Carpool", "Motorcycle_or_scooter", "Other", "Miles_to_campus")
+
+# define vector of columns related to apportionment of transportation modes
+modes_of_transp <- c("Drive_gas", "Drive_electric", "Walk", "Bike_or_nonmotor",
+                     "Bus", "Carpool", "Motorcycle_or_scooter", "Other")
+
+# read in student data - keep track of response indices for identifying problematic records
+student_df <- read_excel(path = "Miami_Commuter_Analysis_FY25.xlsx",
+                         sheet = "Student Calculations",
+                         col_names = student_cols,
+                         skip = 1) %>%
+  mutate(`Response #` = 1:n()) %>%
+  relocate(`Response #`) %>%
+  relocate(Walk, .after = Drive_electric)
+
+# read in employee data - keep track of response indices for identifying problematic records
+employee_df <- read_excel(path = "Miami_Commuter_Analysis_FY25.xlsx",
+                          sheet = "Employee Calculations",
+                          col_names = employee_cols,
+                          skip = 1) %>%
+  mutate(`Response #` = 1:n()) %>%
+  relocate(`Response #`)
+```
+
+*STUDENT*
+
+- **On_campus** = USER_Will_you_live_on_campus_during_the_2024_2025_academic_year_
+- **Days_fall_spring** = On average how many days a week do/will you come to campus in Fall/Spring semester?
+- **Days_jterm** = On average how many days a week do/will you come to campus in JTerm?
+- **Days_summer** = On average how many days a week do/will you come to campus in Summer?
+- **Drive_gas** = Drive (gas hybrid electric or diesel-powered car/truck)
+- **Drive_electric** = Drive (plug-in electric vehicle)
+- **Walk** = Walk
+- **Bike_or_nonmotor** = Bicycle or use other non-motorized means
+- **Bus** = BCRTA bus
+- **Carpool** = Vanpool or carpool as a passenger
+- **Motorcycle_or_scooter** = Use a motorcycle scooter or moped
+- **Other** = Other
+- **Miles_to_campus** = Miles_to_campus
+
+*EMPLOYEE*
+
+- **Days_commute_fall_spring** = How many days in a week during the regular Fall/Spring semesters do you commute to campus? (Please see the definition of commuting above)
+- **Days_remote_fall_spring** = How many days in a week during the regular Fall/Spring semesters do you work remote or from your residence?
+- **Days_commute_summer_winter** = How many days in a week during Summer and Winter/JTerm when the campus is open do you commute to/from campus? (Please see the definition of commuting above)
+- **Days_remote_summer_winter** = How many days in a week during Summer and Winter/JTerm when the campus is open do you work remote or from your residence?
+- **Gas_100** = When you commute to campus do you commute using a gas powered vehicle 100% of the time?
+- **Drive_gas** = Driving (gas hybrid electric or diesel-powered car/truck)
+- **Drive_electric** = Driving (plug-in electric vehicle)
+- **Walk** = Walk
+- **Bike_or_nonmotor** = Bicycle or use other non-motorized means
+- **Bus** = BCRTA bus
+- **Carpool** = Vanpool or carpool as a passenger
+- **Motorcycle_or_scooter** = Use a motorcycle scooter or moped
+- **Other** = Other
+- **Miles_to_campus** = Miles_to_campus
+
+Semester lengths in weeks (Fall/Spring = 15; J-Term = 4; Summer = 12) are taken from the university's official academic calendar and are used to magnify the average number of days per week an individual commutes up to an annual total. Our target population is all FY25 permit-holding commuters at Miami University. There are 3,745 total permit-holding commuters divided between two groups: faculty/staff employees (2,802 permits) and commuter students (943 permits). Note that on-campus student residents who do not commute are out of the scope of this analysis. Average fuel economy in miles per gallon (mpg) and average carbon emissions in metric tons of carbon dioxide equivalent per gallon (MTCO2e/gal) of light-duty vehicles (LDVs) were sourced from the U.S. Environmental Protection Agency (EPA) and used to convert individuals' commuting mileages into estimates of gas consumption and CO2 emissions.
+
+## 2.2 Survey Issues & Validation
+Since the survey contained open-response questions, no data validation methods were implemented at the time of completing the survey to ensure that responses were appropriately entered. As a result, there are several issues where responses do not match the intended logic of the questions, which could negatively impact the accuracy of our estimation process. The issues we identified follow these conditions:
+
+- **Incomplete Response:** if a respondent filled out no information regarding their modes of transportation.
+- **Invalid Apportionment:** if a respondent did not apportion their modes of transportation to sum to 100%.
+- **Contradictory Apportionment:** if an employee indicated "No" for `Gas_100` but indicated "100" for `Drive_gas` and "0" for other modes of transportation.
+- **Invalid Week:** if an employee indicated a sum of more than 5 days for `Days_commute_fall_spring` and `Days_remote_fall_spring` or for `Days_commute_summer_winter` and `Days_remote_summer_winter` or indicated a sum of 0 for `Days_commute_fall_spring` and `Days_commute_summer_winter`.
+
+```{r data_vald}
+# incomplete response - there were no incomplete responses for students
+incomp_resp <- employee_df %>%
+  filter(is.na(Gas_100)) %>%
+  mutate(Issue = "Incomplete Response",
+         Domain = "Employee") %>%
+  select(Domain, `Response #`, Issue)
+
+# invalid apportionment
+invald_appmnt_student <- student_df %>%
+  filter(rowSums(select(., all_of(modes_of_transp)), na.rm = TRUE) != 100) %>%
+  mutate(Issue = "Invalid Apportionment",
+         Domain = "Student") %>%
+  select(Domain, `Response #`, Issue)
+
+invald_appmnt_employee <- employee_df %>%
+  filter(Gas_100 == "No") %>%
+  filter(rowSums(select(., all_of(modes_of_transp)), na.rm = TRUE) != 100) %>%
+  mutate(Issue = "Invalid Apportionment",
+         Domain = "Employee") %>%
+  select(Domain, `Response #`, Issue)
+
+invald_appmnt <- rbind(invald_appmnt_student,
+                       invald_appmnt_employee)
+
+# contradictory apportionment
+contrad_appmnt <- employee_df %>%
+  filter(Gas_100 == "No" & Drive_gas == 100) %>%
+  mutate(Issue = "Contradictory Apportionment",
+         Domain = "Employee") %>%
+  select(Domain, `Response #`, Issue)
+
+# invalid week
+invald_wk <- employee_df %>%
+  filter((Days_commute_fall_spring + Days_remote_fall_spring > 5) |
+          Days_commute_summer_winter + Days_remote_summer_winter > 5 |
+          Days_commute_fall_spring + Days_commute_summer_winter == 0) %>%
+  mutate(Issue = "Invalid Week",
+         Domain = "Employee") %>%
+  select(Domain, `Response #`, Issue)
+
+# combine issues in single dataframe
+issues_df <- rbind(incomp_resp,
+                   invald_appmnt,
+                   contrad_appmnt,
+                   invald_wk) %>%
+  arrange(desc(Domain), `Response #`) %>%
+  mutate(Issue = factor(Issue,
+                        levels = c("Incomplete Response", "Invalid Apportionment",
+                                   "Contradictory Apportionment", "Invalid Week")),
+         Domain = factor(Domain,
+                         levels = c("Student", "Employee")))
+
+# contingency table of issues
+kable(table(issues_df$Issue, issues_df$Domain),
+      caption = "Table 1: Counts of Survey Response Issues") %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+```
+
+To address these issues, we first identify individual responses where these issues take place. Table 1 summarizes the counts of each issue type in the survey data. See *Appendix A* for a list of survey responses that violated at least one of the four conditions.
+
+#### Incomplete Responses
+In order to estimate mileage and carbon emissions, a survey response is only useful to us if we know what modes of transportation are at play. If we do not have this information, we cannot know if the mileage attributed to that response produces any emissions at all—and it if it does, we certainly cannot quantify it. For this reason, we regard all incomplete responses as useless and remove them from the analysis.
+
+```{r incomp_resp}
+### remove incomplete responses ###
+employee_clean <- employee_df %>%
+  filter(!is.na(Gas_100))
+
+# did not occur in student data
+```
+
+#### Invalid Apportionments
+Without data validation methods implemented within the survey, respondents bore the burden of having to do their own math. Although simple, mistakes (or misunderstandings) can occur. In instances where the sum of the percentages for the modes of transportation was not 100, we noticed large variation in what the entries were actually summed to (0, 30, 95, 95, 105, 115, 120, and 155), as well as variation in how the transportation mode fields were even filled out. Given the different approaches these respondents took to answering the question, they clearly held conceptions of the question that were too different from one another to warrant any attempt to salvage the information. Therefore, we remove these responses from the analysis.
+
+```{r invald_appmnt}
+### remove invalid apportionments ###
+# for employee data
+employee_clean <- employee_clean %>%
+  filter(
+    # keep if Gas_100 = "Yes" because otherwise the NAs will affect the next condition
+    if_all(all_of(modes_of_transp), is.na) |
+    # OR keep if sum == 100, including partially incomplete responses
+    (rowSums(select(., all_of(modes_of_transp)), na.rm=TRUE) == 100))
+
+# for student data
+student_clean <- student_df %>%
+  # keep if sum == 100, including partially incomplete responses
+  filter(rowSums(select(., all_of(modes_of_transp)), na.rm=TRUE) == 100)
+```
+
+#### Contradictory Apportionments
+If an employee selects "No" when asked if they commute to campus using a gas powered vehicle 100% of the time (i.e., `Gas_100` = "No") but then indicates that the percent of the time they drive a gas, hybrid electric, or diesel-powered car/truck is 100 (i.e., `Drive_gas` = 100), we assume the employee intended to put "Yes" for `Gas_100`. Thus, we convert the value of `Gas_100` from "No" to "Yes" for all 12 of these instances in the employee data and treat them the same as we would any other response marked "Yes" in this field. Note that the `Gas_100` field does not exist in the student data, and so contradictory apportionments only apply to employees.
+
+```{r contrad_appmnt}
+### adjust contradictory apportionment ###
+employee_clean <- employee_clean %>%
+  mutate(Gas_100 = ifelse((Gas_100 == "No" & as.numeric(Drive_gas) == 100), "Yes", Gas_100)) %>%
+  mutate(Gas_100 = ifelse(`Response #` == 126, "No", Gas_100)) # manually fix response #126
+
+# not relevant for student data
+```
+
+#### Invalid Weeks
+There are 86 instances of invalid weeks among employees. Invalid weeks occur in three ways: (1) employees assume any work done at home constitutes remote work and double count individual days as both "commute days" and "remote days", (2) employees assume that a week refers to seven days and consequently apportion their commute/remote days to sum to seven, or (3) employees respond that they commute 0 days per week in every academic term. Note that since students were not asked to distinguish between commuting and working remotely, invalid weeks only apply to employees. To address the issue of invalid weeks, we will ignore the fields related to remote work (`Days_remote_fall_spring` and `Days_remote_summer_winter`), as they add no value to our estimation of mileage, gas consumption, and carbon emissions. Thus, only the commuting fields (`Days_commute_fall_spring` and `Days_commute_summer_winter`) are of interest. In these two fields, all employee respondents entered values between 0 and 5. Since this aligns with the concept of a "business week," we will treat these as business days attributable to operations of the university. However, if an employee put 0 for both commuting fields, this implies that the employee is *not a commuter despite having purchased a parking pass.* Due to the ambiguity of what the employee's intent was in these cases, we remove these responses from the analysis.
+
+```{r invald_wk}
+### remove remote work information ###
+employee_clean <- employee_clean %>%
+  select(-Days_remote_fall_spring, -Days_remote_summer_winter) %>%
+  filter(Days_commute_fall_spring + Days_commute_summer_winter != 0)
+
+# not relevant to student data
+```
+
+## 2.3 Additional Data Cleaning
+
+#### 'Gas 100%' Imputation
+Naturally, if an employee answered "Yes" for `Gas_100`, the survey did not ask them to apportion their modes of transportation, resulting in missing values in the data. Since the apportionment for each of these employees is known (100% for driving a gas/hybrid vehicle, 0% for every other mode), we impute their values, such that `Drive_gas` takes on a value of 100 and the other modes of transportation each take on a value of 0.
+
+```{r 100_impute}
+### impute Drive_gas to be 100 and all others to be 0 for Gas_100 == "Yes"
+employee_clean <- employee_clean %>%
+  mutate(Drive_gas             = ifelse(Gas_100 == "Yes", 100, Drive_gas),
+         Drive_electric        = ifelse(Gas_100 == "Yes", 0, Drive_electric),
+         Walk                  = ifelse(Gas_100 == "Yes", 0, Walk),
+         Bike_or_nonmotor      = ifelse(Gas_100 == "Yes", 0, Bike_or_nonmotor),
+         Bus                   = ifelse(Gas_100 == "Yes", 0, Bus),
+         Carpool               = ifelse(Gas_100 == "Yes", 0, Carpool),
+         Motorcycle_or_scooter = ifelse(Gas_100 == "Yes", 0, Motorcycle_or_scooter),
+         Other                 = ifelse(Gas_100 == "Yes", 0, Other))
+
+# not relevant to student data
+```
+
+#### Zero Imputation
+Since we have already dealt with invalid apportionments, we can be sure that all remaining responses sum to 100 in the transportation-mode-related fields. However, there are three variations in how respondents handled apportioning 0% to modes of transportation: (1) they entered the values as zero, (2) they left the fields blank, or (3) they did a mixture of both. A similar scenario occurred in the student data for fields related to the number of days per week respondents commuted during JTerm and Summer (`Days_jterm` and `Days_summer`). For consistency, we convert all remaining missing values in these fields to 0.
+
+```{r zero_impute}
+### impute zeros for remaining NAs
+# for employee data
+employee_clean <- employee_clean %>%
+  mutate(across(all_of(modes_of_transp), ~ replace_na(.x, 0)))
+
+# for student data
+student_clean <- student_clean %>%
+  mutate(across(all_of(modes_of_transp), ~ replace_na(.x, 0))) %>%
+  mutate(Days_jterm = if_else(is.na(Days_jterm), 0, Days_jterm),
+         Days_summer = if_else(is.na(Days_summer), 0, Days_summer))
+```
+
+#### Removing Implausibly Long Distances
+We observed that some distances from campus computed from the reported home addresses of survey respondents seemed suspicious.
+
+```{r, fig.fullwidth=TRUE, fig.height=2.5}
+# build a clean distance frame with group labels
+dist_df <- bind_rows(
+  employee_clean %>%
+    transmute(Domain = "Employee",
+              Miles_to_campus = as.numeric(Miles_to_campus)),
+  student_clean %>%
+    transmute(Domain = "Student",
+              Miles_to_campus = as.numeric(Miles_to_campus))
+) %>%
+  filter(!is.na(Miles_to_campus))
+
+# Boxplot by group
+ggplot(dist_df, aes(x = Domain, y = Miles_to_campus, fill = Domain)) +
+  geom_boxplot(width = 0.6, outlier.alpha = 0.5, outliers = FALSE) +
+  geom_jitter(alpha = 0.2, width = 0.1) +
+  coord_flip() +
+  labs(
+    caption = "Figure 1: One remaining employee reported an implausible distance from campus.",
+    x = NULL,
+    y = "Miles to Campus"
+  ) +
+  theme_classic() +
+  theme(plot.caption = element_text(size = 10, hjust = 0),
+        legend.position = "none")
+```
+
+Figure 1 shows the distributions of distances from campus in miles for the remaining data filtered up to this point. Notably, there is one remaining employees who reported a home address located over 100 miles from campus. It is not plausible for an employee to commute 100+ miles one-way (200+ miles round trip), so this survey response is likely to reflect a data entry issue, secondary residence, or some special case that we do not wish to consider in our estimation. Since there is non-statistical justification that this response is unreliable, we remove it from the analysis.
+
+```{r}
+### remove implausible distances
+# for employee data
+employee_clean <- employee_clean %>%
+  filter(Miles_to_campus <= 100)
+
+# for student data
+student_clean <- student_clean %>%
+  filter(Miles_to_campus <= 100)
+```
+
+#### Summary of Cleaned Data
+Up to this point, we have removed or cleaned numerous survey responses and provided justification for each decision.
+
+```{r count_table}
+# summarize student data
+student_sum <- student_clean %>%
+  summarize(`n (original)` = nrow(student_df),
+            `n (adjusted)` = n(),
+            `N` = 943,
+            `Response Rate (original)` = `n (original)`/`N`*100,
+            `Response Rate (adjusted)` = `n (adjusted)`/`N`*100,
+            Drive_gas = mean(Drive_gas),
+            Drive_electric = mean(Drive_electric),
+            Walk = mean(Walk),
+            Bike_or_nonmotor = mean(Bike_or_nonmotor),
+            Bus = mean(Bus),
+            Carpool = mean(Carpool),
+            Motorcycle_or_scooter = mean(Motorcycle_or_scooter),
+            Other = mean(Other))
+
+# summarize employee data
+employees_sum <- employee_clean %>%
+  summarize(`n (original)` = nrow(employee_df),
+            `n (adjusted)` = n(),
+            `N` = 2802,
+            `Response Rate (original)` = `n (original)`/`N`*100,
+            `Response Rate (adjusted)` = `n (adjusted)`/`N`*100,
+            Drive_gas = mean(Drive_gas),
+            Drive_electric = mean(Drive_electric),
+            Walk = mean(Walk),
+            Bike_or_nonmotor = mean(Bike_or_nonmotor),
+            Bus = mean(Bus),
+            Carpool = mean(Carpool),
+            Motorcycle_or_scooter = mean(Motorcycle_or_scooter),
+            Other = mean(Other))
+
+# combine dataframes and provide row names
+sum <- as.data.frame(rbind(student_sum, employees_sum)) %>%
+  mutate(across(4:13, ~ paste0(round(.x, 2), "%")))
+rownames(sum) <- c("Student", "Employee")
+
+# display table
+kable(select(sum, 1:5), digits = 2, align = "r",
+      caption = "Table 2: Summary of Cleaned Data")
+```
+
+For students and employees, Table 2 depicts the sample sizes ($n$) before and after data cleaning, the number of permits we know were issued in the population ($N$), and the resulting response rates before and after data cleaning. Overall, we removed 4 responses from the student data and 25 responses from the employee data. Adjusting for the removed responses, 6.04% of students and 16.45% of employees who obtained a parking permit completed the survey.
+
+## 2.4 Further Decision Points
+
+#### Transportation Modes Used for Estimation
+Many of the transportation modes in the survey are not used in the estimation procedure.
+
+```{r}
+# display table
+kable(select(sum, 6:13), digits = 2, align = "r",
+      caption = "Table 3: Average Apportionment of Transportation Modes")
+```
+
+Table 3 lists the apportionment of each mode of transportation averaged across all survey responses for both students and employees. We notice that employees drive a gas-powered vehicle at a higher apportionment than students, and students walk at a higher apportionment than employees. This can be explained by the fact that more students live within walking distance to campus than employees. Among the eight modes of transportation included in the survey, we only consider gas-powered vehicles (not including motorcycles/scooters) for the estimation. Justification for each of the excluded modes are listed below:
+
+- `Drive_electric`: Electric vehicles do not consume gas.
+- `Walk`: Walking does not consume gas.
+- `Bike_or_nonmotor`: Bikes/nonmotor vehicles do not consume gas.
+- `Bus`: The BCRTA bus is not an operation of the university.
+- `Carpool`: It is ambiguous whether respondents answered as the driver or the passenger. We do not want to risk counting the same vehicle multiple times.
+- `Motorcycle_or_scooter`: It is ambiguous whether respondents used a motorcycle or a scooter. Motocycles and scooters consume vastly different amounts of gas, so we could only reliably estimate emissions from these vehicles if they were separated into two different fields. Additionally, since the apportionment to this mode is so small for both students (0.53%) and employees (0.02%), the issue of whether or not to include it is trivial to our estimation.
+
+#### Breaks & Holidays
+One consideration is how to address the issue of academic breaks and holidays. It is possible that students and employees factored breaks/holidays into their reported weekly commuting averages. Due to the ambiguity in whether or not respondents already deducted these days, we do not account for breaks/holidays to avoid "double deducting" them in our estimates.
+
+## 2.5 Statistical Methodology
+
+#### Finite-population Correction (FPC)
+In traditional statistical estimation procedures, it is assumed that the population of interest is infinitely large (or, in practice, that the sample is of negligible size compared to the population). However, as mentioned in *Section 2.1,* the number of parking permits bought in FY25 is known and finite: $N_1 = 943$ permits were sold to students and $N_2 = 2,802$ permits were sold to employees. Thus, $N = N_1 + N_2 = 3,745$ is our total population size. Recall from *Section 2.3* that after the data cleaning process, we had $n_1 = 57$ student survey responses and $n_2 = 451$ survey responses. Thus, $n = n_1 + n_2 = 508$ is our total sample size. If our sample size was negligible compared to the population size, we would expect the ratio of the sample size to the population size ($\frac{n}{N}$) to be close to zero. However, $\frac{n}{N} = \frac{508}{3,745} = 0.1356$, meaning that our sample comprises 13.56% of the population. To account for our sample taking a non-negligible "chunk" out of our population, we implement the finite-population correction (FPC) in calculations pertaining to the uncertainty of our estimates. In general form, we add
+
+$$FPC = 1 - \frac{n}{N}$$
+
+as a multiplicative factor in standard error calculations. In scenarios where the sample is negligible relative to the population, $\frac{n}{N}$ will be close to $0$, and thus the FPC will be close to $1$ and will not effect the standard error. As the sample size becomes increasingly non-negligible, the FPC will decrease and take stronger effect on the calculation. In our case,
+
+$$FPC = 1 - \frac{508}{3,745} = 0.8644$$
+
+will be applied as a multiplicative factor to the standard errors of estimates of total commuting mileage, gasoline consumption, and CO2 emissions.
+
+#### Annual Metrics at the Respondent Level
+Recall the number of weeks in each academic term from *Section 2.1* ($Weeks_{Fall} = Weeks_{Spring} = 15$; $Weeks_{J-Term} = 4$; $Weeks_{Summer} = 12$). For each survey respondent, we calculate the annual number of days that they commute (`annual_days`) by multiplying their reported weekly averages with the corresponding number of weeks per term and summing the products. We then calculate each respondent's annual commuting mileage with the formula `annual_miles` $= 2 \hspace{1mm} \times$ `Miles_to_campus` $\times$ `annual_days`. Note that we multiply by two because `Miles_to_campus` is a one-way distance. Importantly, `annual_miles` represents the total commuting miles in FY25 for a given respondent including all modes of transportation. According to the EPA, the average fuel economy as of 2023 for LDVs is 26 mpg (U.S. Environmental Protection Agency, 2023) and the average CO2 emissions per gallon of consumed gasoline as of 2025 is 0.0089 MTCO2e/gal (U.S. Environmental Protection Agency, 2025). From here, we compute annual gas-consuming commuting mileage (`annual_gas_miles`), annual gallons of gasoline consumed (`annual_gallons`), and annual CO2 emissions (`annual_CO2`) for each respondent as
+
+\begin{align*}
+\texttt{annual_gas_miles} &= \texttt{annual_miles} \times \left(\frac{\texttt{Drive_gas}}{100}\right) \hspace{1mm}; \\
+
+\texttt{annual_gallons} &= \left(\frac{\texttt{annual_gas_miles}}{26}\right) \hspace{1mm}; \\
+
+\texttt{annual_CO2} &= \texttt{annual_gallons} \times 0.0089 \hspace{1mm}.
+\end{align*}
+
+#### Post-stratification & Bootstrapping
+Students and employees represent two mutually-exclusive strata of the population of permit holders. Therefore, to estimate total gas-consuming commuting mileage, gasoline consumption, and CO2 emissions for students and employees, we implement a post-stratified bootstrap approach (Chao & Lo, 1985). The student and employee samples are first expanded into "bootstrap populations" by replicating each individual in proportion to the ratio of the population size to the sample size. Specifically, each student record is repeated $k_1 = \text{round}(N_1/n_1) = 17$ times and each employee record is repeated $k_2 = \text{round}(N_2/n_2) = 6$ times to reflect the respective population structures. For each of the three outcome variables (`annual_gas_miles`, `annual_gallons`, and `annual_CO2`), a bootstrap procedure is run. The procedure (1) draws a bootstrap sample without replacement separately for students and employees from their respective bootstrap populations, (2) computes the estimated total for the respective outcome variable for both students, $\hat{T}_1$, and employees, $\hat{T}_2$, as well as students and employees combined, $\hat{T}$, (3) repeats steps 1 and 2 10,000 times to obtain many estimated totals, (4) computes the mean of the estimates to yield a single point estimate for both students, $\hat{T}_s$, and employees, $\hat{T}_e$, as well as students and employees combined, $\hat{T}_{overall}$, (5) computes the standard error of the estimates for both students, $SE(\hat{T}_s)$, and employees, $SE(\hat{T}_e)$, as well as students and employees combined, $SE(\hat{T}_{overall})$, and (6) generates 95% confidence intervals using the normal approximation. Estimated totals within each iteration of the bootstrap procedure are computed as
+
+$$\hat{T}_i = N_i \bar{y}_i \hspace{1mm},$$
+
+where $i=1$ represents the student stratum and $i=2$ represents the employee stratum. The estimate within the iteration for the combined total is computed as
+
+$$\hat{T} = \hat{T}_1 + \hat{T}_2 \hspace{1mm}.$$
+
+The variances for $\hat{T}_e$ and $\hat{T}_s$ are computed using the FPC as
+
+$$V(\hat{T}_j) = \left(1-\frac{n_i}{N_i}\right) \left(\frac{N_i(n_i-1)}{(N_i-1)n_i}\right) \left(\frac{N_i^2 S_i^2}{n_i}\right) \hspace{1mm},$$
+
+where $j = s, e$; $i = 1, 2$; and $s_i$ is the standard unbiased estimate of the finite population variance $S^2$. Finally, the standard errors for $\hat{T}_e$ and $\hat{T}_s$ are derived from the variances as
+
+$$SE(\hat{T}_j) = \sqrt{V(\hat{T}_j)} \hspace{1mm},$$
+
+where $j = s, e$, and the standard error for $\hat{T}_{overall}$ is
+
+$$SE(\hat{T}_{overall}) = \sqrt{V(\hat{T}_s) + V(\hat{T}_e)} \hspace{1mm}.$$
+
+
+# 3. Results
+
+```{r constants}
+### DEFINE OUR CONSTANTS/KNOWN VALUES
+# sample sizes
+n1 <- nrow(student_clean)
+n2 <- nrow(employee_clean)
+n <- n1 + n2
+
+# population sizes
+N1 <- 943
+N2 <- 2802
+N <- N1 + N2
+
+# bootstrap sample sizes
+k1 <- round(N1 / n1)
+k2 <- round(N2 / n2)
+
+# number of weeks per term
+weeks <- c(Fall = 15, Spring = 15, JTerm = 4, Summer = 12)
+
+# miles per gallon
+mpg_const <- 26
+
+# metric tons CO2 per gallon (EPA tailpipe factor)
+co2_per_gal <- 0.0089
+```
+
+```{r annual_info}
+# add annual information - student
+student_annual <- student_clean %>%
+  mutate(annual_days = Days_fall_spring * weeks["Fall"] +
+                       Days_fall_spring * weeks["Spring"] +
+                       Days_jterm * weeks["JTerm"] + 
+                       Days_summer * weeks["Summer"],
+         annual_miles = 2 * Miles_to_campus * annual_days,
+         annual_gas_miles = annual_miles * Drive_gas/100,
+         annual_gallons = annual_gas_miles / mpg_const,
+         annual_CO2 = annual_gallons * co2_per_gal)
+
+# add annual information - employee
+employee_annual <- employee_clean %>%
+  mutate(annual_days = Days_commute_fall_spring * weeks["Fall"] +
+                       Days_commute_fall_spring * weeks["Spring"] +
+                       Days_commute_summer_winter * weeks["JTerm"] + 
+                       Days_commute_summer_winter * weeks["Summer"],
+         annual_miles = 2 * Miles_to_campus * annual_days,
+         annual_gas_miles = annual_miles * Drive_gas/100,
+         annual_gallons = annual_gas_miles / mpg_const,
+         annual_CO2 = annual_gallons * co2_per_gal)
+```
+
+```{r bootstrap_w_poststratification}
+# define "bootstrap populations"
+student_bs_pop <- student_annual[rep(1:nrow(student_annual), each = k1), ]
+employee_bs_pop <- employee_annual[rep(1:nrow(employee_annual), each = k2), ]
+
+### ALGORITHM TO PERFORM ESTIMATION ###
+estimate <- function(var) {
+  # set seed for reproducibility
+  set.seed(12345)
+
+  # initialize vectors
+  T_hats_s <- c()
+  T_hats_e <- c()
+  T_hats <- c()
+  
+  # loop to obtain many many T_hats
+  for(i in 1:10000) {
+    # draw a "bootstrap sample"
+    student_bs_sample <- student_bs_pop[sample(1:nrow(student_bs_pop), size = n1), ]
+    employee_bs_sample <- employee_bs_pop[sample(1:nrow(employee_bs_pop), size = n2), ]
+    
+    # compute T_hat (for students and employees separately, then combine)
+    T_hats_s[i] <- N1 * mean(student_bs_sample[[var]])
+    T_hats_e[i] <- N2 * mean(employee_bs_sample[[var]])
+    T_hats[i] <- T_hats_s[i] + T_hats_e[i]
+  }
+  
+  # T_hat; THIS IS OUR ESTIMATE OF THE TOTAL
+  T_hat_s <- mean(T_hats_s)
+  T_hat_e <- mean(T_hats_e)
+  T_hat <- mean(T_hats)
+  
+  # compute s1 and s2
+  s1 <- sd(student_annual[[var]])
+  s2 <- sd(employee_annual[[var]])
+  
+  # V_hat_T_hat; THIS IS OUR ESTIMATE OF THE VARIANCE
+  V_hat_T_hat_s <- (1-n1/N1) * (N1*(n1-1))/((N1-1)*n1) * N1^2 * (s1^2)/n1
+  V_hat_T_hat_e <- (1-n2/N2) * (N2*(n2-1))/((N2-1)*n2) * N2^2 * (s2^2)/n2
+  V_hat_T_hat <- V_hat_T_hat_s + V_hat_T_hat_e
+  
+  # SE_T_hat; THIS IS THE ESTIMATED STANDARD ERROR OF T_HAT
+  SE_T_hat_s <- sd(T_hats_s)
+  SE_T_hat_e <- sd(T_hats_e)
+  SE_T_hat <- sqrt(V_hat_T_hat)
+  sd_T_hat <- sd(T_hats) # double check via the simulation results
+  
+  # 95% CIs
+  ME_s <- 1.96 * SE_T_hat_s
+  ME_e <- 1.96 * SE_T_hat_e
+  ME <- 1.96 * SE_T_hat
+  CI_low_s <- T_hat_s - ME_s
+  CI_low_e <- T_hat_e - ME_e
+  CI_low <- T_hat - ME
+  CI_high_s <- T_hat_s + ME_s
+  CI_high_e <- T_hat_e + ME_e
+  CI_high <- T_hat + ME
+  
+  # return df of results
+  results <- data.frame(Estimate = c(T_hat_s, T_hat_e, T_hat),
+                        SE = c(SE_T_hat_s, SE_T_hat_e, SE_T_hat),
+                        `95_CI_low` = c(CI_low_s, CI_low_e, CI_low),
+                        `95_CI_high` = c(CI_high_s, CI_high_e, CI_high)) %>%
+    mutate(across(where(is.numeric), ~ format(round(.x, 1), big.mark = ",", nsmall = 1)))
+  rownames(results) <- c("Students", "Employees", "Total")
+  
+  return(results)
+}
+
+# run algorithm for each outcome variable
+miles_est <- estimate("annual_gas_miles")
+gallons_est <- estimate("annual_gallons")
+CO2_est <- estimate("annual_CO2")
+```
+
+Post-stratified bootstrap estimates are obtained for total gas-consuming commuting mileage, gasoline consumption, and CO2 emissions among students and employees.
+
+```{r}
+# print results
+kable(miles_est, align = "r",
+      caption = "Table 4: Final Estimates of Total Gas-Consuming Commuting Mileage",
+      col.names = c("Estimate", "SE", "95% CI Low", "95% CI High")) %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE) %>%
+  row_spec(nrow(miles_est), bold = TRUE)
+```
+
+As shown in Table 4, the estimated total annual gas-consuming commuting mileage for the university was 14.23 $\pm$ 0.63 million miles (95% CI = 12.99 million, 15.47 million). Employees accounted for the majority of this total, contributing an estimated 10.72 $\pm$ 0.47 million miles, compared to 3.51 $\pm$ 0.42 million miles for students.
+
+```{r}
+kable(gallons_est, align = "r",
+      caption = "Table 5: Final Estimates Gasoline Consumption (gal)",
+      col.names = c("Estimate", "SE", "95% CI Low", "95% CI High")) %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE) %>%
+  row_spec(nrow(gallons_est), bold = TRUE)
+```
+
+Correspondingly, estimated annual gasoline consumption totaled 547,375 $\pm$ 24,301 gallons (95% CI = 499,745, 595,004), with employees responsible for 412,333 $\pm$ 18,019 gallons and students for 135,042 $\pm$ 16,191 gallons (Table 5).
+
+```{r}
+kable(CO2_est, align = "r",
+      caption = "Table 6: Final Estimates of C02 Emissions (MTCO2e)",
+      col.names = c("Estimate", "SE", "95% CI Low", "95% CI High")) %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE) %>%
+  row_spec(nrow(CO2_est), bold = TRUE)
+```
+
+Using the EPA's CO2 emission conversion factor, total CO2 emissions were estimated at 4,872.6 $\pm$ 216.3 MTCO2e (95% CI = 4,447.7, 5,295.5), of which employees contributed approximately 3,669.8 $\pm$ 160.4 MTCO2e and students 1,201.9 $\pm$ 144.1 MTCO2e (Table 6). Overall, results indicate that employees contribute roughly three times more commuting-related fuel consumption and CO2 emissions than students, reflecting larger population size, more frequent commuting patterns, and further commuting distances.
+
+# 4.Conclusion
+This study combined post-stratification and bootstrap estimation to produce university-wide estimates of commuting mileage, gasoline consumption, and CO2 emissions for students and employees. Results suggest that employees account for the majority of commuting-related environmental impact, contributing roughly three-quarters of total vehicle miles traveled and associated emissions. Of the 11,722 MTCO2e annual emissions related to Scope 3 of President Crawford's Climate Action Plan, this analysis finds that slightly less than half is attributable to commuting. A key limitation of this analysis is that the survey data may be subject to nonresponse bias since the survey was optional. It it possible that individuals who chose not to participate differ systematically in commuting distance or frequency from those who did, which may bias the results of the analysis. Consequently, the reported totals should be interpreted as approximate indicators rather than exact population values. Future work could improve precision by increasing response rates, which were particularly low among students.
+
+
+# References
+- Chao, M.-T., & Lo, S.-H. (1985). A bootstrap method for finite population. Sankhyā: The Indian Journal of Statistics, Series A, 47(3), 399-405. Retrieved from https://www.jstor.org/stable/10.2307/2290991
+- Population correction factor. (n.d.). In ScienceDirect Topics. Elsevier. Retrieved October 26, 2025, from https://www.sciencedirect.com/topics/mathematics/population-correction-factor
+- U.S. Environmental Protection Agency. (2023). The 2023 Automotive Trends Report: Greenhouse gas emissions, fuel economy, and technology since 1975 (EPA-420-R-23-015). https://www.epa.gov/automotive-trends
+- U.S. Environmental Protection Agency. (2025). Greenhouse Gas Emissions from a Typical Passenger Vehicle. Retrieved from U.S. EPA Green Vehicle Guide: https://www.epa.gov/greenvehicles/greenhouse-gas-emissions-typical-passenger-vehicle
+- World Food Programme (VAM). (2017). Introduction to post-stratification [PDF]. Rome: World Food Programme. https://docs.wfp.org/api/documents/WFP-0000121326/download/
+- 2025-2026 Academic Calendar. (n.d.). Retrieved from https://miamioh.edu/academic-programs/academic-calendar/2025-2026.html
+
+
+
+# Appendix
+#### A. List of incomplete responses, invalid apportionments, contradictory apportionments, and invalid weeks
+
+```{r, warning=FALSE, message=FALSE}
+# list all issues
+kable(issues_df) %>%
+  kable_styling(bootstrap_options = "striped") %>%
+  scroll_box(height = "400px")
+```
+
