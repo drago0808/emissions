@@ -1,2 +1,14 @@
-# emissions
-This project was requested by President Crawford and is tied to the University Climate Action Plan. The goal is to quantify the carbon emissions resulting from commuting to campus in the 2025 fiscal year (FY25).
+## Repository Structure
+
+This repository contains three folders:
+
+### `01_Report/`
+- Contains the final HTML report including methods, results, and conclusions
+- File can be downloaded for viewing
+
+### `02_Code/`
+- R Markdown file (.Rmd) integrates R code with text to generate report
+- R file (.r) contains all R code used for data cleaning, visualization, and analysis
+
+### `03_Data/`
+- Contains the original dataset used in the project
